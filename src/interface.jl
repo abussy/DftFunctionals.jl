@@ -276,7 +276,7 @@ function energy(func::Functional{:gga}, ρ::AbstractVector{T},
 
     ρtotal = ρ[1]
     σtotal = σ[1]
-    if ρtotal ≤ threshold_ρ(func, T)
+    if ρtotal < threshold_ρ(func, T) # <= does not work on the GPU
         zero(arithmetic_type(func, T, U))
     else
         σstable = max(σtotal, threshold_σ(func, U))
