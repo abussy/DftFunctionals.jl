@@ -211,9 +211,9 @@ function potential_terms(func::Functional{:gga}, ρ::AbstractMatrix{T},
 end
 function potential_terms(Vρ, Vσ, func::Functional{:gga},
                           ρ::AbstractVector{T}, σ::AbstractVector{U}) where{T,U}
-    res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(arithmetic_type(func, T, U)), Vρ),
+    res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(eltype(Vρ)), Vρ),
                                 ρ -> energy(func, ρ, σ), ρ)
-    tmp = ForwardDiff.gradient!(DiffResults.DiffResult(zero(arithmetic_type(func, T, U)), Vσ),
+    tmp = ForwardDiff.gradient!(DiffResults.DiffResult(zero(eltype(Vσ)), Vσ),
                                 σ -> energy(func, ρ, σ), σ)
     DiffResults.value(res)
 end
