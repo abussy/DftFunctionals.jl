@@ -119,7 +119,7 @@ function potential_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T
     s_ρ, n_p = size(ρ)
     TT = arithmetic_type(func, T)
 
-    #e  = similar(ρ, TT, n_p)
+    e  = similar(ρ, TT, n_p)
     Vρ = similar(ρ, TT, s_ρ, n_p)
     #@views for i = 1:n_p
     #    potential_terms!(e[i:i], Vρ[:, i], func, ρ[:, i])
@@ -130,7 +130,7 @@ function potential_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T
     #      Also, make sure whatever we do does not impact CPU perf: it actually seems to be faster that way!
     #      This makes the calculation of the XC energy (a massive bottleneck with @allowscalar) negligible!
     #      need all tests on a big system too, of course
-    e = map(ρ[1, :], Vρ[1, :]) do ρ_i, Vρ_i
+    map!(e, ρ[1, :], Vρ[1, :]) do ρ_i, Vρ_i
         #TODO: assume spin 1 for now
         static_ρ_i = SVector(ρ_i)
         static_Vρ_i= SVector(Vρ_i) 
@@ -274,8 +274,9 @@ function energy(func::Functional{:gga}, ρ::AbstractVector{T},
     length(ρ) == 1 || error("Multiple spins not yet implemented for fallback functionals")
     @assert length(ρ) == 1
 
-    ρtotal = ρ[1]
-    σtotal = σ[1]
+    TT = arithmetic_type(func, T, U)
+    ρtotal = TT(ρ[1])
+    σtotal = TT(σ[1])
     if ρtotal < threshold_ρ(func, T) # <= does not work on the GPU
         zero(arithmetic_type(func, T, U))
     else
