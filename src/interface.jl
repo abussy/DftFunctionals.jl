@@ -210,8 +210,8 @@ function potential_terms(func::Functional{:gga}, ρ::AbstractMatrix{T},
     end
     (; e, Vρ, Vσ)
 end
-function potential_terms(Vρ, Vσ, func::Functional{:gga},
-                          ρ::AbstractVector{T}, σ::AbstractVector{U}) where{T,U}
+function potential_terms(Vρ::AbstractVector{TT}, Vσ::AbstractVector{TT}, func::Functional{:gga},
+                         ρ::AbstractVector{T}, σ::AbstractVector{U}) where{TT,T,U}
     energy_ρ(x::T) where {T} = energy(func, x, SVector(T(σ[1]))) #TODO: necessary for GPU fragile types. Pass scalars to energy?
     res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(TT), Vρ), energy_ρ, ρ)
     energy_σ(x::U) where {U} = energy(func, SVector(U(ρ[1])), x)
