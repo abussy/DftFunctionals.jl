@@ -199,7 +199,8 @@ function potential_terms(func::Functional{:gga}, ρ::AbstractMatrix{T},
     gpu_func = to_isbits(func)
     Vρ = similar(ρ, TT, s_ρ, n_p)
     Vσ = similar(ρ, TT, s_σ, n_p)
-    e = map(ρ[1, :], Vρ[1, :], σ[1, :], Vσ[1, :]) do ρ_i, Vρ_i, σ_i, Vσ_i
+    e = similar(ρ, TT, n_p)
+    map!(e, ρ[1, :], Vρ[1, :], σ[1, :], Vσ[1, :]) do ρ_i, Vρ_i, σ_i, Vσ_i
         #TODO: assume spin 1 for now
         static_ρ_i = SVector(ρ_i)
         static_Vρ_i= SVector(Vρ_i) 
@@ -211,10 +212,10 @@ function potential_terms(func::Functional{:gga}, ρ::AbstractMatrix{T},
 end
 function potential_terms(Vρ, Vσ, func::Functional{:gga},
                           ρ::AbstractVector{T}, σ::AbstractVector{U}) where{T,U}
-    res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(eltype(Vρ)), Vρ),
-                                ρ -> energy(func, ρ, σ), ρ)
-    tmp = ForwardDiff.gradient!(DiffResults.DiffResult(zero(eltype(Vσ)), Vσ),
-                                σ -> energy(func, ρ, σ), σ)
+    energy_ρ(x::T) where {T} = energy(func, x, SVector(T(σ[1]))) #TODO: necessary for GPU fragile types. Pass scalars to energy?
+    res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(TT), Vρ), energy_ρ, ρ)
+    energy_σ(x::U) where {U} = energy(func, SVector(U(ρ[1])), x)
+    tmp = ForwardDiff.gradient!(DiffResults.DiffResult(zero(TT), Vσ), energy_σ, σ)
     DiffResults.value(res)
 end
 #function potential_terms!(e, Vρ, Vσ, func::Functional{:gga},
@@ -269,14 +270,16 @@ function kernel_terms!(e, Vρ, Vσ, Vρρ, Vρσ, Vσσ, func::Functional{:gga},
     nothing
 end
 
+#TODO: here we need T and U to be different, as it goes into FD. But at the functional level, we can probably
+#      assume we use the same type. Same for the FD map! kernel, U and T should be the same at that point
 function energy(func::Functional{:gga}, ρ::AbstractVector{T},
                 σ::AbstractVector{U}) where {T,U}
     length(ρ) == 1 || error("Multiple spins not yet implemented for fallback functionals")
     @assert length(ρ) == 1
 
     TT = arithmetic_type(func, T, U)
-    ρtotal = TT(ρ[1])
-    σtotal = TT(σ[1])
+    ρtotal = ρ[1]
+    σtotal = σ[1]
     if ρtotal < threshold_ρ(func, T) # <= does not work on the GPU
         zero(arithmetic_type(func, T, U))
     else
