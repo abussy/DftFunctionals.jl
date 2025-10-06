@@ -81,6 +81,12 @@ threshold_σ(f::Functional, T::Type{<:Dual}) = threshold_σ(f, ForwardDiff.valty
 threshold_τ(f::Functional, T::Type{<:Dual}) = threshold_τ(f, ForwardDiff.valtype(T))
 threshold_ζ(f::Functional, T::Type{<:Dual}) = threshold_ζ(f, ForwardDiff.valtype(T))
 
+# Util functions for Dual comparison on the GPU. TODO: overload operators directly?
+# In fact, this is only truely necessary for AMD GPUs, so do that in an extensions?
+# Finally, can we inherit the overloaded comparisons from DFTK?
+_val(x) = x
+_val(x::Dual) = _val(ForwardDiff.value(x))
+
 # Silently drop extra arguments from evaluation functions
 for fun in (:potential_terms, :kernel_terms)
     @eval begin
@@ -179,7 +185,7 @@ end
 function energy(func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
     length(ρ) == 1 || error("Multiple spins not yet implemented for fallback functionals")
     ρtotal = ρ[1]
-    if ρtotal < threshold_ρ(func, T) # <= does not work on the GPU
+    if _val(ρtotal) <= _val(threshold_ρ(func, T))
         zero(T)
     else
         energy(func, ρtotal)
@@ -272,6 +278,7 @@ end
 
 #TODO: here we need T and U to be different, as it goes into FD. But at the functional level, we can probably
 #      assume we use the same type. Same for the FD map! kernel, U and T should be the same at that point
+#TODO: need to explicitly acces Dual values for comparisons to work on the GPU. Overload <, > and == ?
 function energy(func::Functional{:gga}, ρ::AbstractVector{T},
                 σ::AbstractVector{U}) where {T,U}
     length(ρ) == 1 || error("Multiple spins not yet implemented for fallback functionals")
@@ -280,10 +287,10 @@ function energy(func::Functional{:gga}, ρ::AbstractVector{T},
     TT = arithmetic_type(func, T, U)
     ρtotal = ρ[1]
     σtotal = σ[1]
-    if ρtotal < threshold_ρ(func, T) # <= does not work on the GPU
+    if _val(ρtotal) <= _val(threshold_ρ(func, T))
         zero(arithmetic_type(func, T, U))
     else
-        σstable = max(σtotal, threshold_σ(func, U))
+	σstable = _val(σtotal) > _val(threshold_σ(func, U)) ? σtotal : threshold_σ(func, U)
         energy(func, ρtotal, σstable)
     end
 end
