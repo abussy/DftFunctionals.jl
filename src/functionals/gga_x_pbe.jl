@@ -2,8 +2,8 @@ struct PbeExchange{NT, Id} <: Functional{:gga,:x} where {NT<:NamedTuple, Id<:Uni
     parameters::NT
     identifier::Id
 end
-function PbeExchange(parameters::NamedTuple)
-    PbeExchange(parameters, :gga_x_pbe_custom)
+function PbeExchange(parameters)
+    PbeExchange(NamedTuple(parameters), :gga_x_pbe_custom)
 end
 function to_isbits(pbe::PbeExchange)
     PbeExchange(pbe.parameters, Val{pbe.identifier}())
@@ -11,12 +11,12 @@ end
 
 identifier(pbe::PbeExchange) = pbe.identifier
 parameters(pbe::PbeExchange) = pbe.parameters
-function change_parameters(pbe::PbeExchange, parameters::NamedTuple;
+function change_parameters(pbe::PbeExchange, parameters;
                            keep_identifier=false)
     if keep_identifier
-        PbeExchange(parameters, pbe.identifier)
+        PbeExchange(NamedTuple(parameters), pbe.identifier)
     else
-        PbeExchange(parameters)
+        PbeExchange(NamedTuple(parameters))
     end
 end
 

@@ -125,10 +125,13 @@ function potential_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T
     s_ρ, n_p = size(ρ)
     TT = arithmetic_type(func, T)
 
+    indices = similar(ρ, Int, n_p)
+    copyto!(indices, collect(1:n_p))
+
     e  = similar(ρ, TT, n_p)
     Vρ = similar(ρ, TT, s_ρ, n_p)
     #@views for i = 1:n_p
-    #    potential_terms!(e[i:i], Vρ[:, i], func, ρ[:, i])
+    #    potential_terms!(e[i:i], Vρ[:, i], func, ρ[:, i]) #TODO: this call seems to be important, rather than the content of e
     #end
     #TODO: seems to work that way. Check if this is OK without modification to ForwardDiff or DFTK
     #      then refine, and check perf vs simply transfering to CPU and back
@@ -136,19 +139,20 @@ function potential_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T
     #      Also, make sure whatever we do does not impact CPU perf: it actually seems to be faster that way!
     #      This makes the calculation of the XC energy (a massive bottleneck with @allowscalar) negligible!
     #      need all tests on a big system too, of course
-    map!(e, ρ[1, :], Vρ[1, :]) do ρ_i, Vρ_i
+    map!(e, indices) do i
         #TODO: assume spin 1 for now
-        static_ρ_i = SVector(ρ_i)
-        static_Vρ_i= SVector(Vρ_i) 
-        #TODO: could pass SVector constructor directly in function call
-        potential_terms(static_Vρ_i, func, static_ρ_i)
+        tmp = potential_terms(func, SVector(ρ[1, i]))
+        Vρ[1, i:i] .= tmp.Vρ
+        tmp.e
     end
     (; e, Vρ)
 end
-function potential_terms(Vρ, func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
-    res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(arithmetic_type(func, T)), Vρ),
-                                ρ -> energy(func, ρ), ρ)
-    DiffResults.value(res)
+function potential_terms(func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
+    #TODO: do we really need to pass V as argument, can't we just spit it out?
+    res = ForwardDiff.gradient!(DiffResults.GradientResult(ρ), ρ -> energy(func, ρ), ρ)
+    #TODO: to me it looks like e is just the value of the above, while V is the full thing. Could simply
+    #      return res, and do the cooking afterwards? Could even do a map on V, and the fill e in a second loop?
+    (; e = DiffResults.value(res), Vρ = DiffResults.gradient(res))
 end
 #function potential_terms!(e, Vρ, func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
 #    res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(eltype(e)), Vρ),
@@ -162,25 +166,35 @@ function kernel_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T}
     s_ρ, n_p = size(ρ)
     TT = arithmetic_type(func, T)
 
+    indices = similar(ρ, Int, n_p)
+    copyto!(indices, collect(1:n_p))
+
     e   = similar(ρ, TT, n_p)
     Vρ  = similar(ρ, TT, s_ρ, n_p)
     Vρρ = similar(ρ, TT, s_ρ, s_ρ, n_p)
 
     # TODO Needed to make forward-diff work with !isbits floating-point types (e.g. BigFloat)
-    Vρ  .= zero(T)
-    Vρρ .= zero(T)
+    Vρ  .= zero(TT)
+    Vρρ .= zero(TT)
 
-    @views for i = 1:n_p
-        kernel_terms!(e[i:i], Vρ[:, i], Vρρ[:, :, i], func, ρ[:, i])
+    map!(e, indices) do i
+        tmp = kernel_terms(func, SVector(ρ[1, i]))
+        Vρ[1, i:i] .= tmp.Vρ
+        Vρρ[1, i:i] .= tmp.Vρρ
+        tmp.e
     end
     (; e, Vρ, Vρρ)
 end
-function kernel_terms!(e, Vρ, Vρρ, func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
-    res = ForwardDiff.hessian!(DiffResults.DiffResult(zero(eltype(e)), Vρ, Vρρ),
-                               ρ -> energy(func, ρ), ρ)
-    e .= DiffResults.value(res)
-    nothing
+function kernel_terms(func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
+    res = ForwardDiff.hessian!(DiffResults.HessianResult(ρ), ρ -> energy(func, ρ), ρ)
+    (; e = DiffResults.value(res), Vρ = DiffResults.gradient(res), Vρρ = DiffResults.hessian(res))
 end
+#function kernel_terms!(e, Vρ, Vρρ, func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
+#    res = ForwardDiff.hessian!(DiffResults.DiffResult(zero(eltype(e)), Vρ, Vρρ),
+#                               ρ -> energy(func, ρ), ρ)
+#    e .= DiffResults.value(res)
+#    nothing
+#end
 
 function energy(func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
     length(ρ) == 1 || error("Multiple spins not yet implemented for fallback functionals")
@@ -202,27 +216,39 @@ function potential_terms(func::Functional{:gga}, ρ::AbstractMatrix{T},
     s_σ = size(σ, 1)
     TT = arithmetic_type(func, T, U)
 
+    indices = similar(ρ, Int, n_p)
+    copyto!(indices, collect(1:n_p))
     gpu_func = to_isbits(func)
+
     Vρ = similar(ρ, TT, s_ρ, n_p)
     Vσ = similar(ρ, TT, s_σ, n_p)
     e = similar(ρ, TT, n_p)
-    map!(e, ρ[1, :], Vρ[1, :], σ[1, :], Vσ[1, :]) do ρ_i, Vρ_i, σ_i, Vσ_i
+    map!(e, indices) do i
         #TODO: assume spin 1 for now
-        static_ρ_i = SVector(ρ_i)
-        static_Vρ_i= SVector(Vρ_i) 
-        static_σ_i = SVector(σ_i)
-        static_Vσ_i= SVector(Vσ_i)
-        potential_terms(static_Vρ_i, static_Vσ_i, gpu_func, static_ρ_i, static_σ_i)
+        tmp = potential_terms(gpu_func, SVector(ρ[1, i]), SVector(σ[1, i]))
+        Vρ[1, i:i] .= tmp.Vρ
+        Vσ[1, i:i] .= tmp.Vσ
+        tmp.e
     end
+
+    #@views for i = 1:n_p                                                                             
+    #    potential_terms!(e[i:i], Vρ[:, i], Vσ[:, i], func, ρ[:, i], σ[:, i])
+    #end
     (; e, Vρ, Vσ)
 end
-function potential_terms(Vρ::AbstractVector{TT}, Vσ::AbstractVector{TT}, func::Functional{:gga},
-                         ρ::AbstractVector{T}, σ::AbstractVector{U}) where{TT,T,U}
-    energy_ρ(x::T) where {T} = energy(func, x, SVector(T(σ[1]))) #TODO: necessary for GPU fragile types. Pass scalars to energy?
-    res = ForwardDiff.gradient!(DiffResults.DiffResult(zero(TT), Vρ), energy_ρ, ρ)
-    energy_σ(x::U) where {U} = energy(func, SVector(U(ρ[1])), x)
-    tmp = ForwardDiff.gradient!(DiffResults.DiffResult(zero(TT), Vσ), energy_σ, σ)
-    DiffResults.value(res)
+function potential_terms(func::Functional{:gga}, ρ::AbstractVector{T}, σ::AbstractVector{U}) where{T, U}
+    #TODO: need all Dual types to be the same upon entry, or GPU compilation fails
+    function energy_ρ(x::AbstractVector{T}) where {T}
+        new_params = map(p -> T(p), func.parameters)
+        energy(change_parameters(func, new_params), x, SVector(T(σ[1])))
+    end
+    res_ρ = ForwardDiff.gradient!(DiffResults.GradientResult(ρ), energy_ρ, ρ)
+    function energy_σ(x::AbstractVector{U}) where {U}
+        new_params = map(p -> U(p), func.parameters)
+        energy(change_parameters(func, new_params), SVector(U(ρ[1])), x)
+    end
+    res_σ = ForwardDiff.gradient!(DiffResults.GradientResult(σ), energy_σ, σ)
+    (; e = DiffResults.value(res_ρ), Vρ = DiffResults.gradient(res_ρ), Vσ = DiffResults.gradient(res_σ))
 end
 #function potential_terms!(e, Vρ, Vσ, func::Functional{:gga},
 #                          ρ::AbstractVector, σ::AbstractVector)
@@ -241,6 +267,10 @@ function kernel_terms(func::Functional{:gga}, ρ::AbstractMatrix{T},
     s_σ = size(σ, 1)
     TT = arithmetic_type(func, T, U)
 
+    indices = similar(ρ, Int, n_p)
+    copyto!(indices, collect(1:n_p))
+    gpu_func = to_isbits(func)
+
     e   = similar(ρ, TT, n_p)
     Vρ  = similar(ρ, TT, s_ρ, n_p)
     Vσ  = similar(ρ, TT, s_σ, n_p)
@@ -255,40 +285,71 @@ function kernel_terms(func::Functional{:gga}, ρ::AbstractMatrix{T},
     Vρσ .= zero(TT)
     Vσσ .= zero(TT)
 
-    @views for i = 1:n_p
-        kernel_terms!(e[i:i], Vρ[:, i], Vσ[:, i],
-                      Vρρ[:, :, i], Vρσ[:, :, i], Vσσ[:, :, i],
-                      func, ρ[:, i], σ[:, i])
+    map!(e, indices) do i
+        tmp = kernel_terms(gpu_func, SVector(ρ[1, i]), SVector(σ[1, i]))
+        Vρ[1, i:i] .= tmp.Vρ
+        Vσ[1, i:i] .= tmp.Vσ
+        Vρρ[1, 1, i:i] .= tmp.Vρρ
+        Vσσ[1, 1, i:i] .= tmp.Vσσ
+        Vρσ[1, 1, i:i] .= tmp.Vρσ
+        tmp.e
     end
+
+    #@views for i = 1:n_p
+    #    kernel_terms!(e[i:i], Vρ[:, i], Vσ[:, i],
+    #                  Vρρ[:, :, i], Vρσ[:, :, i], Vσσ[:, :, i],
+    #                  func, ρ[:, i], σ[:, i])
+    #end
     (; e, Vρ, Vσ, Vρρ, Vρσ, Vσσ)
 end
-function kernel_terms!(e, Vρ, Vσ, Vρρ, Vρσ, Vσσ, func::Functional{:gga},
-                       ρ::AbstractVector, σ::AbstractVector)
-    res = ForwardDiff.hessian!(DiffResults.DiffResult(zero(eltype(e)), Vρ, Vρρ),
-                               ρ -> energy(func, ρ, σ), ρ)
-    res = ForwardDiff.hessian!(DiffResults.DiffResult(zero(eltype(e)), Vσ, Vσσ),
-                               σ -> energy(func, ρ, σ), σ)
+function kernel_terms(func::Functional{:gga}, ρ::AbstractVector{T}, σ::AbstractVector{U}) where {T, U}
+    function energy_ρ(x::AbstractVector{T}) where {T}
+        new_params = map(p -> T(p), func.parameters)
+        energy(change_parameters(func, new_params), x, SVector(T(σ[1])))
+    end
+    res_ρ = ForwardDiff.hessian!(DiffResults.HessianResult(ρ), energy_ρ, ρ)
+    function energy_σ(x::AbstractVector{U}) where {U}
+        new_params = map(p -> U(p), func.parameters)
+        energy(change_parameters(func, new_params), SVector(U(ρ[1])), x)
+    end
+    res_σ = ForwardDiff.hessian!(DiffResults.HessianResult(σ), energy_σ, σ)
 
-    dedρ = σ -> ForwardDiff.gradient(ρ -> energy(func, ρ, σ), ρ)
-    ForwardDiff.jacobian!(Vρσ, dedρ, σ)
+    #TODO: one should probably try and remain general, and do the fancy thing here too. AMD?
+    dedρ_σ = σ -> ForwardDiff.gradient(ρ -> energy(func, ρ, σ), ρ)
+    res_ρσ = ForwardDiff.jacobian!(DiffResults.JacobianResult(σ), dedρ_σ, σ)
 
-    e .= DiffResults.value(res)
-    nothing
+    (; e = DiffResults.value(res_ρ), Vρ = DiffResults.gradient(res_ρ), Vρρ = DiffResults.hessian(res_ρ),
+       Vσ = DiffResults.gradient(res_σ), Vσσ = DiffResults.hessian(res_σ), Vρσ = DiffResults.jacobian(res_ρσ))
 end
+#function kernel_terms!(e, Vρ, Vσ, Vρρ, Vρσ, Vσσ, func::Functional{:gga},
+#                       ρ::AbstractVector, σ::AbstractVector)
+#    res = ForwardDiff.hessian!(DiffResults.DiffResult(zero(eltype(e)), Vρ, Vρρ),
+#                               ρ -> energy(func, ρ, σ), ρ)
+#    res = ForwardDiff.hessian!(DiffResults.DiffResult(zero(eltype(e)), Vσ, Vσσ),
+#                               σ -> energy(func, ρ, σ), σ)
+#
+#    dedρ = σ -> ForwardDiff.gradient(ρ -> energy(func, ρ, σ), ρ)
+#    ForwardDiff.jacobian!(Vρσ, dedρ, σ)
+#
+#    e .= DiffResults.value(res)
+#    nothing
+#end
 
 #TODO: here we need T and U to be different, as it goes into FD. But at the functional level, we can probably
 #      assume we use the same type. Same for the FD map! kernel, U and T should be the same at that point
+#      As things stand, energy is always called with the same types, due to GPU compilation restrictions
+#      might as well assume same type everywhere. To be fair, that could also serve as a check
 #TODO: need to explicitly acces Dual values for comparisons to work on the GPU. Overload <, > and == ?
 function energy(func::Functional{:gga}, ρ::AbstractVector{T},
                 σ::AbstractVector{U}) where {T,U}
     length(ρ) == 1 || error("Multiple spins not yet implemented for fallback functionals")
     @assert length(ρ) == 1
-
     TT = arithmetic_type(func, T, U)
-    ρtotal = ρ[1]
-    σtotal = σ[1]
+
+    ρtotal = TT(ρ[1])
+    σtotal = TT(σ[1])
     if _val(ρtotal) <= _val(threshold_ρ(func, T))
-        zero(arithmetic_type(func, T, U))
+        zero(TT) #arithmetic_type(func, T, U))
     else
 	σstable = _val(σtotal) > _val(threshold_σ(func, U)) ? σtotal : threshold_σ(func, U)
         energy(func, ρtotal, σstable)

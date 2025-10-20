@@ -4,11 +4,11 @@ struct PbeCorrelation{Tlda,NT,Id} <:
     lda::Tlda
     identifier::Id
 end
-function PbeCorrelation(parameters::NamedTuple, lda=DftFunctional(:lda_c_pw))
-    PbeCorrelation(parameters, lda, :gga_c_pbe_custom)
+function PbeCorrelation(parameters, lda=DftFunctional(:lda_c_pw))
+    PbeCorrelation(NamedTuple(parameters), lda, :gga_c_pbe_custom)
 end
-function PbeCorrelation(parameters::NamedTuple, identifier::Symbol)
-    PbeCorrelation(parameters, DftFunctional(:lda_c_pw), identifier)
+function PbeCorrelation(parameters, identifier::Symbol)
+    PbeCorrelation(NamedTuple(parameters), DftFunctional(:lda_c_pw), identifier)
 end
 function to_isbits(pbe::PbeCorrelation)
     PbeCorrelation(pbe.parameters, pbe.lda, Val{pbe.identifier}())
@@ -16,12 +16,12 @@ end
 
 identifier(pbe::PbeCorrelation) = pbe.identifier
 parameters(pbe::PbeCorrelation) = pbe.parameters
-function change_parameters(pbe::PbeCorrelation, parameters::NamedTuple;
+function change_parameters(pbe::PbeCorrelation, parameters;
                            keep_identifier=false)
     if keep_identifier
-        PbeCorrelation(parameters, pbe.lda, pbe.identifier)
+        PbeCorrelation(NamedTuple(parameters), pbe.lda, pbe.identifier)
     else
-        PbeCorrelation(parameters, pbe.lda)
+        PbeCorrelation(NamedTuple(parameters), pbe.lda)
     end
 end
 
