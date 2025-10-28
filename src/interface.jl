@@ -133,12 +133,6 @@ function potential_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T
     #@views for i = 1:n_p
     #    potential_terms!(e[i:i], Vρ[:, i], func, ρ[:, i]) #TODO: this call seems to be important, rather than the content of e
     #end
-    #TODO: seems to work that way. Check if this is OK without modification to ForwardDiff or DFTK
-    #      then refine, and check perf vs simply transfering to CPU and back
-    #      Is allocating a SVector at each iteration expensive?
-    #      Also, make sure whatever we do does not impact CPU perf: it actually seems to be faster that way!
-    #      This makes the calculation of the XC energy (a massive bottleneck with @allowscalar) negligible!
-    #      need all tests on a big system too, of course
     map!(e, indices) do i
         #TODO: assume spin 1 for now
         tmp = potential_terms(func, SVector(ρ[1, i]))
@@ -148,10 +142,10 @@ function potential_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T
     (; e, Vρ)
 end
 function potential_terms(func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
-    #TODO: do we really need to pass V as argument, can't we just spit it out?
-    res = ForwardDiff.gradient!(DiffResults.GradientResult(ρ), ρ -> energy(func, ρ), ρ)
-    #TODO: to me it looks like e is just the value of the above, while V is the full thing. Could simply
-    #      return res, and do the cooking afterwards? Could even do a map on V, and the fill e in a second loop?
+    function energy_ρ(x::AbstractVector{T}) where {T}
+        energy(func, x)
+    end
+    res = ForwardDiff.gradient!(DiffResults.GradientResult(ρ), energy_ρ, ρ)
     (; e = DiffResults.value(res), Vρ = DiffResults.gradient(res))
 end
 #function potential_terms!(e, Vρ, func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
@@ -186,7 +180,10 @@ function kernel_terms(func::Functional{:lda}, ρ::AbstractMatrix{T}) where {T}
     (; e, Vρ, Vρρ)
 end
 function kernel_terms(func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
-    res = ForwardDiff.hessian!(DiffResults.HessianResult(ρ), ρ -> energy(func, ρ), ρ)
+    function energy_ρ(x::AbstractVector{T}) where {T}
+        energy(func, x)
+    end
+    res = ForwardDiff.hessian!(DiffResults.HessianResult(ρ), energy_ρ, ρ)
     (; e = DiffResults.value(res), Vρ = DiffResults.gradient(res), Vρρ = DiffResults.hessian(res))
 end
 #function kernel_terms!(e, Vρ, Vρρ, func::Functional{:lda}, ρ::AbstractVector{T}) where {T}
@@ -315,6 +312,7 @@ function kernel_terms(func::Functional{:gga}, ρ::AbstractVector{T}, σ::Abstrac
     res_σ = ForwardDiff.hessian!(DiffResults.HessianResult(σ), energy_σ, σ)
 
     #TODO: one should probably try and remain general, and do the fancy thing here too. AMD?
+    #      would also allow to fix U and T to be the same from the energy() call
     dedρ_σ = σ -> ForwardDiff.gradient(ρ -> energy(func, ρ, σ), ρ)
     res_ρσ = ForwardDiff.jacobian!(DiffResults.JacobianResult(σ), dedρ_σ, σ)
 
